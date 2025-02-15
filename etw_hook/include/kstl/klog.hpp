@@ -27,7 +27,7 @@ namespace kstd {
 	kstd::Logger::logPrint((kstd::Logger::LogLevel)(kstd::Logger::LogLevel::Debug | kstd::Logger::LogLevel::ToFile),__FUNCTION__,format,__VA_ARGS__)
 #define FLOG_ERROR(format,...) \
 	kstd::Logger::logPrint((kstd::Logger::LogLevel)(kstd::Logger::LogLevel::Error | kstd::Logger::LogLevel::ToFile),__FUNCTION__,format,__VA_ARGS__)
-	
+
 	//只记录到文件	
 #define FLOG(format,...) \
 	kstd::Logger::logPrint((kstd::Logger::LogLevel)(kstd::Logger::LogLevel::ToFile),__FUNCTION__,format,__VA_ARGS__)
@@ -36,15 +36,15 @@ namespace kstd {
 	class Logger {
 	public:
 		enum LogLevel {
-			Debug=1,
-			Info=2,
-			Error=4,
-			ToFile=8,/*写到文件中*/
+			Debug = 1,
+			Info = 2,
+			Error = 4,
+			ToFile = 8,/*写到文件中*/
 		};
 	public:
 		static void init(const char* info, const wchar_t* log_file_name);
 		static void destory();
-		static NTSTATUS logPrint(LogLevel log_level, const char* function_name,const char* format, ...);
+		static NTSTATUS logPrint(LogLevel log_level, const char* function_name, const char* format, ...);
 		static void getCurSystemTime(char* buf, size_t size);
 	private:
 		inline static char __info[100];
@@ -52,7 +52,7 @@ namespace kstd {
 		inline static ULONG __offset;
 	};
 
-	inline void Logger::init(const char* info,const wchar_t* nt_log_file_path/*nt path,不要是dos path*/)
+	inline void Logger::init(const char* info, const wchar_t* nt_log_file_path/*nt path,不要是dos path*/)
 	{
 		auto oa = OBJECT_ATTRIBUTES{};
 		auto isb = IO_STATUS_BLOCK{};
@@ -61,10 +61,10 @@ namespace kstd {
 		RtlInitUnicodeString(&u_path, nt_log_file_path);
 		InitializeObjectAttributes(&oa, &u_path, OBJ_KERNEL_HANDLE | OBJ_CASE_INSENSITIVE, 0, 0);
 
-		memcpy_s(__info, sizeof __info,info,strlen(info)+1);
-		
+		memcpy_s(__info, sizeof __info, info, strlen(info) + 1);
 
-		ZwCreateFile(&__hfile, GENERIC_WRITE, &oa, &isb, nullptr, 0, FILE_SHARE_READ | FILE_SHARE_WRITE, FILE_OPEN_IF, 0, 0, 0);
+
+		ZwCreateFile(&__hfile, GENERIC_WRITE, &oa, &isb, nullptr, 0, FILE_SHARE_READ | FILE_SHARE_WRITE, FILE_OPEN_IF, FILE_SYNCHRONOUS_IO_NONALERT | FILE_APPEND_DATA, 0, 0);
 
 	}
 
@@ -91,7 +91,7 @@ namespace kstd {
 		getCurSystemTime(time, sizeof time);
 
 		char full_log_message[512] = {};
-		RtlStringCchPrintfA(full_log_message, sizeof full_log_message, "%s\t[tid %d]\t[%s]\t", time, PsGetCurrentThreadId(), __info);
+		RtlStringCchPrintfA(full_log_message, sizeof full_log_message, "%s\t[pid %d:tid %d]\t[%s]\t", time, PsGetCurrentProcessId(), PsGetCurrentThreadId(), __info);
 
 		if (NT_SUCCESS(status)) {
 			if (log_level & LogLevel::Debug) {
@@ -108,7 +108,7 @@ namespace kstd {
 
 			RtlStringCchCatA(full_log_message, sizeof full_log_message, log_message);
 
-			if (log_level & LogLevel::ToFile && KeGetCurrentIrql()==PASSIVE_LEVEL) {
+			if (log_level & LogLevel::ToFile && KeGetCurrentIrql() == PASSIVE_LEVEL) {
 				IO_STATUS_BLOCK ioStatusBlock;
 				LARGE_INTEGER offset;
 				offset.QuadPart = __offset;

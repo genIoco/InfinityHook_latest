@@ -4,7 +4,7 @@
 #include <refs.hpp>
 
 /*类基类*/
-template <POOL_TYPE pool_type,ULONG pool_tag>
+template <POOL_TYPE pool_type, ULONG pool_tag>
 class _EtwBase {
 public:
 	void* operator new(size_t size);
@@ -19,7 +19,7 @@ inline void* _EtwBase<pool_type, pool_tag>::operator new(size_t size)
 }
 
 template<POOL_TYPE pool_type, ULONG pool_tag>
-inline void _EtwBase<pool_type, pool_tag>::operator delete(void* p, size_t size) 
+inline void _EtwBase<pool_type, pool_tag>::operator delete(void* p, size_t size)
 {
 	UNREFERENCED_PARAMETER(size);
 	return ExFreePool(p);

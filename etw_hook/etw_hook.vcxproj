@@ -72,6 +72,7 @@
     <PlatformToolset>WindowsKernelModeDriver10.0</PlatformToolset>
     <ConfigurationType>Driver</ConfigurationType>
     <DriverType>WDM</DriverType>
+    <Driver_SpectreMitigation>Spectre</Driver_SpectreMitigation>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|ARM'" Label="Configuration">
     <TargetVersion>Windows10</TargetVersion>
@@ -158,6 +159,8 @@
     <ClCompile>
       <LanguageStandard>stdcpp17</LanguageStandard>
       <AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions>
+      <TreatWarningAsError>false</TreatWarningAsError>
+      <LanguageStandard_C>stdc17</LanguageStandard_C>
     </ClCompile>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
@@ -167,16 +170,21 @@
     <ClCompile>
       <LanguageStandard>stdcpp17</LanguageStandard>
       <AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions>
+      <TreatWarningAsError>false</TreatWarningAsError>
+      <ConformanceMode>Default</ConformanceMode>
     </ClCompile>
   </ItemDefinitionGroup>
   <ItemGroup>
     <FilesToPackage Include="$(TargetPath)" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="include\Communication.hpp" />
+    <ClInclude Include="include\Driver.hpp" />
     <ClInclude Include="include\etwhook_base.hpp" />
     <ClInclude Include="include\etwhook_init.hpp" />
     <ClInclude Include="include\etwhook_manager.hpp" />
     <ClInclude Include="include\etwhook_utils.hpp" />
+    <ClInclude Include="include\Functions.hpp" />
     <ClInclude Include="include\kstl\karray.hpp" />
     <ClInclude Include="include\kstl\kautolock.hpp" />
     <ClInclude Include="include\kstl\kavl.hpp" />
@@ -197,9 +205,15 @@
     <ClInclude Include="include\kstl\kstring.hpp" />
     <ClInclude Include="include\kstl\ksystem_info.hpp" />
     <ClInclude Include="include\kstl\kvector.hpp" />
+    <ClInclude Include="include\lyshark.hpp" />
     <ClInclude Include="include\refs.hpp" />
+    <ClInclude Include="include\syscall.hpp" />
+    <ClInclude Include="include\Util.hpp" />
   </ItemGroup>
   <ItemGroup>
+    <ClCompile Include="include\Communication.cpp" />
+    <ClCompile Include="include\syscall.cpp" />
+    <ClCompile Include="include\Util.cpp" />
     <ClCompile Include="src\etwhook_init.cpp" />
     <ClCompile Include="src\etwhook_main.cpp" />
     <ClCompile Include="src\etwhook_manager.cpp" />
