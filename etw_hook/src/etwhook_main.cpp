@@ -16,8 +16,8 @@
 #include "lyshark.hpp"
 
 
-#define InjectDllPath86 L"C:\\Users\\admin\\Desktop\\VS\\ProcessInjectionDection\\bin\\Release\\x86\\Dll.dll"
-#define InjectDllPath64 L"C:\\Users\\admin\\Desktop\\VS\\ProcessInjectionDection\\bin\\Release\\x64\\Dll.dll"
+#define InjectDllPath86 L"C:\\Users\\admin\\Desktop\\VS\\ProcessInjectionDection\\bin\\Debug\\x86\\Dll.dll"
+#define InjectDllPath64 L"C:\\Users\\admin\\Desktop\\VS\\ProcessInjectionDection\\bin\\Debug\\x64\\Dll.dll"
 
 #define EXECUTE_FLAGS (PAGE_EXECUTE | PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY)
 
@@ -104,14 +104,27 @@ NTSTATUS detour_NtAllocateVirtualMemory(
 		{
 			PCHAR CurrentProcessName = GetProcessNameByProcessId(dwCurPid);
 			PCHAR TargetProcessName = GetProcessNameByProcessId(dwTargetPid);
-			//if (RtlCompareMemory(CurrentProcessName, "1.exe", strlen(CurrentProcessName)) == strlen(CurrentProcessName)) {
-			// 去除可执行权限
+			//if (RtlCompareMemory(CurrentProcessName, "DllLoader.exe", strlen(CurrentProcessName)) == strlen(CurrentProcessName)) {
+				// 去除可执行权限
 			if (Protect != newflProtect) {
 				status = NtAllocateVirtualMemory(ProcessHandle, BaseAddress, ZeroBits, RegionSize, AllocationType, newflProtect);
 
 				FLOG_INFO("[NtAllocateVirtualMemory] Change Protect to no execte(NtAllocateVirtualMemory).\n");
 				FLOG_INFO("[NtAllocateVirtualMemory] %s[%d] ==> %s[%d],[addr:0x%p,%s => %s].\n", CurrentProcessName, dwCurPid, TargetProcessName, dwTargetPid, *BaseAddress, ProtectionString(Protect), ProtectionString(newflProtect));
 				FLOG_INFO("[NtAllocateVirtualMemory] Status: %p.\n", status);
+				// 记录内存分配信息
+				MemItem* item = (MemItem*)ExAllocatePool2(POOL_FLAG_PAGED, sizeof(MemItem), 'Pit');
+				if (item) {
+					item->Data.lpAddr = *BaseAddress;
+					item->Data.dwSize = *RegionSize;
+					item->Data.curflProtect = newflProtect;
+					item->Data.oriflProtect = Protect;
+					item->Data.initiatorPid = dwCurPid;
+					item->Data.targetPid = dwTargetPid;
+					item->Data.DIRTY = FALSE;
+					PushItem(dwTargetPid, &item->Entry);
+				}
+
 				// 附加执行注入
 				FLOG_INFO("[NtAllocateVirtualMemory] Inject DLL.\n");
 				AttachAndInjectProcess(dwTargetPid, InjectDllPath86, InjectDllPath64);
@@ -214,7 +227,7 @@ NTSTATUS detour_NtProtectVirtualMemory(
 			PCHAR TargetProcessName = GetProcessNameByProcessId(dwTargetPid);
 
 			// 检查是否添加了新的执行权限
-			if ((NewAccessProtection & EXECUTE_FLAGS) && !(*OldAccessProtection & EXECUTE_FLAGS)) {
+			if ((NewAccessProtection & EXECUTE_FLAGS)) {
 				// 去除执行权限
 				ULONG newflProtect = (NewAccessProtection & ~EXECUTE_FLAGS);
 				if (NewAccessProtection & PAGE_EXECUTE_READ) newflProtect |= PAGE_READONLY;
@@ -227,7 +240,7 @@ NTSTATUS detour_NtProtectVirtualMemory(
 				status = NtProtectVirtualMemory(ProcessHandle, BaseAddress, NumberOfBytesToProtect, newflProtect, OldAccessProtection);
 				FLOG_INFO("[NtProtectVirtualMemory] Change Protect to no execte(NtProtectVirtualMemory)");
 				FLOG_INFO("[NtProtectVirtualMemory] %s[%d] ==> %s[%d],[addr:0x%p,%s => %s].\n", CurrentProcessName, dwCurPid, TargetProcessName, dwTargetPid, *BaseAddress, ProtectionString(*OldAccessProtection), ProtectionString(newflProtect));
-				FLOG_INFO("[NtAllocateVirtualMemory] Inject DLL.\n");
+				FLOG_INFO("[NtProtectVirtualMemory] Inject DLL.\n");
 				AttachAndInjectProcess(dwTargetPid, InjectDllPath86, InjectDllPath64);
 
 				return status;
@@ -362,7 +375,7 @@ NTSTATUS DispatchDefault(IN PDEVICE_OBJECT pDeviceObject, IN PIRP pIrp)
 // IRP_MJ_CREATE 对应的处理例程，一般不用管它
 NTSTATUS DispatchCreate(PDEVICE_OBJECT pDevObj, PIRP pIrp)
 {
-	DbgPrint("[kernel] 驱动处理例程载入 \n");
+	FLOG_INFO("驱动处理例程载入。\n");
 	pIrp->IoStatus.Status = STATUS_SUCCESS;
 	pIrp->IoStatus.Information = 0;
 	IoCompleteRequest(pIrp, IO_NO_INCREMENT);
@@ -372,7 +385,7 @@ NTSTATUS DispatchCreate(PDEVICE_OBJECT pDevObj, PIRP pIrp)
 // IRP_MJ_CLOSE 对应的处理例程，一般不用管它
 NTSTATUS DispatchClose(PDEVICE_OBJECT pDevObj, PIRP pIrp)
 {
-	DbgPrint("[kernel] # 关闭派遣 \n");
+	FLOG_INFO("关闭派遣 \n");
 	pIrp->IoStatus.Status = STATUS_SUCCESS;
 	pIrp->IoStatus.Information = 0;
 	IoCompleteRequest(pIrp, IO_NO_INCREMENT);
@@ -396,43 +409,34 @@ NTSTATUS DispatchRead(IN PDEVICE_OBJECT pDeviceObject, IN PIRP pIrp)
 	//此函数返回MdlAddress描述的缓冲区非分页系统虚拟机地址
 	UCHAR* buffer = (UCHAR*)MmGetSystemAddressForMdlSafe(pIrp->MdlAddress, NormalPagePriority);
 	if (!buffer) {
-		DbgPrint(("[kernel] 获取缓冲区非分页虚拟地址失败。\n"));
+		FLOG_INFO(("获取缓冲区非分页虚拟地址失败。\n"));
 		return STATUS_UNSUCCESSFUL;
 	}
 
 	ExAcquireFastMutex(&global.Mutex);
 
-	//一次性将链表中的内容读出来
-	while (1) {
+	// 将链表中的内容读出来
+	PLIST_ENTRY pEntry = global.Header.Flink, pMemEntry;
+	PProcessItem pProcessItem;
+	PMemItem pMemPageItem;
+	while (pEntry != &global.Header) {
 
-		if (IsListEmpty(&global.Header)) break;
-
-		PLIST_ENTRY entry = RemoveHeadList(&global.Header);//去除第一个
-
-		Item* info = CONTAINING_RECORD(entry, Item, Entry);//找到Item结构体地址
-
-		ULONG size = sizeof(ThreadData);
-
-		if (len < size) {
-
-			//如果缓冲区长度不够 就将原数据插回去 然后在退出
-			InsertTailList(&global.Header, entry);
-			break;
+		pProcessItem = CONTAINING_RECORD(pEntry, ProcessItem, Entry);
+		pMemEntry = pProcessItem->MemPageHeader.Flink;
+		while (pMemEntry != &pProcessItem->MemPageHeader) {
+			pMemPageItem = CONTAINING_RECORD(pMemEntry, MemItem, Entry);
+			ULONG size = sizeof(SusMemPage);
+			if (len < size) {
+				// 缓冲区长度不够则退出
+				break;
+			}
+			memcpy(buffer, &pMemPageItem->Data, size);
+			buffer += size;
+			len -= size;
+			count += size;
+			pMemEntry->Flink;
 		}
-
-		global.ItemCount--;
-
-		//复制到缓冲区
-		memcpy(buffer, &info->Data, size);
-
-		buffer += size;
-
-		len -= size;
-
-		count += size;
-
-		ExFreePool(info);
-
+		pEntry = pEntry->Flink;
 	}
 
 	ExReleaseFastMutex(&global.Mutex);
@@ -461,13 +465,48 @@ NTSTATUS DispatchControl(IN PDEVICE_OBJECT pDeviceObject, IN PIRP pIrp)
 	ULONG ulInfo = 0;
 	// 获取控制码
 	ULONG ulControlCode = pIoStackLocation->Parameters.DeviceIoControl.IoControlCode;
-	DbgPrint("[kernel] 接收到控制码（%02x）\n", ulControlCode);
+	FLOG_INFO("接收到控制码（0x%02x）\n", ulControlCode);
 
 	switch (ulControlCode)
 	{
+		// 0x10002000
+	case IOCTL_PIT_TEST:
+	{
+		FLOG_INFO("执行PIT_TEST操作（0x%02x）\n", ulControlCode);
+		FLOG_INFO("发起进程pid:%d", PsGetCurrentProcessId());
 		break;
 	}
+	// 0x10002004
+	case IOCTL_PIT_SET_PPL:
+		FLOG_INFO("执行PIT_SET_PPL操作（0x%02x）\n", ulControlCode);
+		break;
+		// 0x10002000
+	case IOCTL_PIT_GET_MEM_PAGE:
+		// 大括号能够限制变量的作用域，避免变量未初始化错误
+	{
+		FLOG_INFO("执行PIT_GET_MEM_PAGE操作（0x%02x）\n", ulControlCode);
+		if (pIoStackLocation->Parameters.DeviceIoControl.InputBufferLength < sizeof(PVOID) ||
+			pIoStackLocation->Parameters.DeviceIoControl.OutputBufferLength < sizeof(HANDLE)) {
+			status = STATUS_BUFFER_TOO_SMALL;
+			break;
+		}
+		// 获取输入缓冲区数据
+		HANDLE processId = PsGetCurrentProcessId();
+		PVOID lpAddr = *(PVOID*)pBuffer;
+		PMemItem pMemItem = FindProcessAndMemNode(processId, lpAddr);
+		*(HANDLE*)pIrp->AssociatedIrp.SystemBuffer = pMemItem ? pMemItem->Data.initiatorPid : 0;
+		ulInfo = sizeof(HANDLE);
 
+		break;
+	}
+	default:
+		status = STATUS_INVALID_PARAMETER;
+		LOG_ERROR("未知控制码（0x%02x）\n", ulControlCode);
+		break;
+	}
+	pIrp->IoStatus.Status = status;
+	pIrp->IoStatus.Information = ulInfo;
+	IoCompleteRequest(pIrp, IO_NO_INCREMENT);
 	return status;
 }
 
@@ -494,18 +533,39 @@ NTSTATUS HookSyscall(const char* SyscallName, void** org_syscall, void* detour_r
 VOID UnloadDriver(PDRIVER_OBJECT pDriverObject)
 {
 	UNICODE_STRING symLink;
+	PLIST_ENTRY pEntry, pMemEntry;
+	PProcessItem pProcessItem;
+	PMemItem pMemPageItem;
+
 
 	DbgPrint("[kernel] 驱动卸载.\r\n");
+	DbgBreakPoint();
 	RtlInitUnicodeString(&symLink, LINK_NAME);
 	IoDeleteSymbolicLink(&symLink);
 	IoDeleteDevice(pDriverObject->DeviceObject);
+	// 加锁，确保线程安全
+	ExAcquireFastMutex(&global.Mutex);
 
-	//清除整个链表
+	// 遍历全局进程链表
 	while (!IsListEmpty(&global.Header)) {
-		PLIST_ENTRY item = RemoveHeadList(&global.Header);
-		Item* fullitem = CONTAINING_RECORD(item, Item, Entry);
-		ExFreePool(fullitem);
+		pEntry = RemoveHeadList(&global.Header);
+		pProcessItem = CONTAINING_RECORD(pEntry, ProcessItem, Entry);
+
+		// 释放该进程的内存页链表
+		while (!IsListEmpty(&pProcessItem->MemPageHeader)) {
+			pMemEntry = RemoveHeadList(&pProcessItem->MemPageHeader);
+			pMemPageItem = CONTAINING_RECORD(pMemEntry, MemItem, Entry);
+			ExFreePool(pMemPageItem);  // 释放 Item
+		}
+
+		// 释放进程节点
+		ExFreePool(pProcessItem);
 	}
+
+	global.ItemCount = 0;
+
+	// 释放锁
+	ExReleaseFastMutex(&global.Mutex);
 	EtwHookManager::get_instance()->destory();
 	kstd::Logger::destory();
 }
@@ -515,7 +575,7 @@ EXTERN_C NTSTATUS DriverEntry(PDRIVER_OBJECT pDriverObject, PUNICODE_STRING)
 	auto status = STATUS_SUCCESS;
 
 
-	kstd::Logger::init("etw_hook", L"\\??\\C:\\log.txt");
+	kstd::Logger::init(LOG_NAME, FLOG_NAME);
 
 	FLOG_INFO("init...\r\n");
 	pDriverObject->DriverUnload = UnloadDriver;
@@ -558,7 +618,7 @@ EXTERN_C NTSTATUS DriverEntry(PDRIVER_OBJECT pDriverObject, PUNICODE_STRING)
 	//HookSyscall("NtMapViewOfSectionEx", ((void**)&pNtMapViewOfSectionEx), detour_NtMapViewOfSectionEx);
 
 	//创建设备对象
-	DbgPrint("[kernel] 创建设备对象...\n");
+	FLOG_INFO("创建设备对象...\n");
 	UNICODE_STRING DevName;
 	UNICODE_STRING SymbolicLink;
 	PDEVICE_OBJECT pDeviceObject;
@@ -583,7 +643,8 @@ EXTERN_C NTSTATUS DriverEntry(PDRIVER_OBJECT pDriverObject, PUNICODE_STRING)
 		return status;
 	}
 
-	InitializeListHead(&global.Header);//初始化链表头 LIST_ENTRY结构的双向链表
+	//初始化链表头 LIST_ENTRY结构的双向链表
+	InitializeListHead(&global.Header);
 	ExInitializeFastMutex(&global.Mutex);
 
 	// 初始化默认分发例程
