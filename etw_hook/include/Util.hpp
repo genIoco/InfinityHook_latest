@@ -15,6 +15,8 @@ PCHAR GetProcessNameByProcessId(HANDLE ProcessId);
 
 NTSTATUS GetPidFromHandle(HANDLE Handle, HANDLE* Pid);
 
+NTSTATUS GetParentProcessId(HANDLE ProcessId, HANDLE* ParentProcessId);
+
 BOOLEAN AreParentChildProcesses(HANDLE ParentPid, HANDLE ChildPid);
 
 const char* ProtectionString(DWORD Protection);
@@ -38,4 +40,4 @@ PVOID GetExportedFunctionAddress(PEPROCESS TargetProcess, PVOID ModuleBase, CONS
 
 int contains_bytes_bitwise(UINT64 address, const UINT8* bytes, size_t num_bytes);
 
-NTSTATUS Sleep(ULONGLONG microseconds);
+BOOLEAN BypassCheckSign(PDRIVER_OBJECT pDriverObject);

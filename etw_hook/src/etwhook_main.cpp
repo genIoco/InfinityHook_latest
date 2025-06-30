@@ -16,8 +16,13 @@
 #include "lyshark.hpp"
 
 
-#define InjectDllPath86 L"C:\\Users\\admin\\Desktop\\VS\\ProcessInjectionDection\\bin\\Debug\\x86\\Dll.dll"
-#define InjectDllPath64 L"C:\\Users\\admin\\Desktop\\VS\\ProcessInjectionDection\\bin\\Debug\\x64\\Dll.dll"
+#define InjectDllPath86 L"C:\\Users\\admin\\Desktop\\VS\\ProcessInjectionDection\\bin\\Release\\x86\\Dll.dll"
+#define InjectDllPath64 L"C:\\Users\\admin\\Desktop\\VS\\ProcessInjectionDection\\bin\\Release\\x64\\Dll.dll"
+//#define InjectDllPath86 L"C:\\Release\\x86\\Dll.dll"
+//#define InjectDllPath64 L"C:\\Release\\Dll.dll"
+
+// 添加调试选项，在调试时输出调试信息，性能测试时取消，便于减少性能损失。
+#define DEBUG TRUE
 
 #define EXECUTE_FLAGS (PAGE_EXECUTE | PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY)
 
@@ -82,65 +87,74 @@ NTSTATUS detour_NtAllocateVirtualMemory(
 	// 是否为自身内存分配
 	if (ProcessHandle != (HANDLE)0xffffffffffffffff)
 	{
-		ULONG newflProtect = Protect;
-		// 去除可执行权限
 
-		if (Protect & PAGE_EXECUTE) newflProtect = PAGE_NOACCESS;
-		if (Protect & PAGE_EXECUTE_READ) newflProtect = PAGE_READONLY;
-		if (Protect & PAGE_EXECUTE_READWRITE) newflProtect = PAGE_READWRITE;
-		if (Protect & PAGE_EXECUTE_WRITECOPY) newflProtect = PAGE_WRITECOPY;
-
-
-		//FLOG_DEBUG("ProcessHandle: %p", ProcessHandle);
-		HANDLE dwCurPid = PsGetCurrentProcessId();
-		HANDLE dwTargetPid = 0;
-		if (!NT_SUCCESS(GetPidFromHandle(ProcessHandle, &dwTargetPid))) {
-			FLOG_ERROR("[NtAllocateVirtualMemory] GetPidFromHandle failed");
-			return status;
-		}
-
-		// 是否为可疑远程内存分配
-		if (!AreParentChildProcesses(dwCurPid, dwTargetPid))
+#ifndef DEBUG
+		if (Protect & EXECUTE_FLAGS)
+#endif // DEBUG
 		{
-			PCHAR CurrentProcessName = GetProcessNameByProcessId(dwCurPid);
-			PCHAR TargetProcessName = GetProcessNameByProcessId(dwTargetPid);
-			//if (RtlCompareMemory(CurrentProcessName, "DllLoader.exe", strlen(CurrentProcessName)) == strlen(CurrentProcessName)) {
-				// 去除可执行权限
-			if (Protect != newflProtect) {
-				status = NtAllocateVirtualMemory(ProcessHandle, BaseAddress, ZeroBits, RegionSize, AllocationType, newflProtect);
-
-				FLOG_INFO("[NtAllocateVirtualMemory] Change Protect to no execte(NtAllocateVirtualMemory).\n");
-				FLOG_INFO("[NtAllocateVirtualMemory] %s[%d] ==> %s[%d],[addr:0x%p,%s => %s].\n", CurrentProcessName, dwCurPid, TargetProcessName, dwTargetPid, *BaseAddress, ProtectionString(Protect), ProtectionString(newflProtect));
-				FLOG_INFO("[NtAllocateVirtualMemory] Status: %p.\n", status);
-				// 记录内存分配信息
-				MemItem* item = (MemItem*)ExAllocatePool2(POOL_FLAG_PAGED, sizeof(MemItem), 'Pit');
-				if (item) {
-					item->Data.lpAddr = *BaseAddress;
-					item->Data.dwSize = *RegionSize;
-					item->Data.curflProtect = newflProtect;
-					item->Data.oriflProtect = Protect;
-					item->Data.initiatorPid = dwCurPid;
-					item->Data.targetPid = dwTargetPid;
-					item->Data.DIRTY = FALSE;
-					PushItem(dwTargetPid, &item->Entry);
-				}
-
-				// 附加执行注入
-				FLOG_INFO("[NtAllocateVirtualMemory] Inject DLL.\n");
-				AttachAndInjectProcess(dwTargetPid, InjectDllPath86, InjectDllPath64);
-
+			HANDLE dwCurPid = PsGetCurrentProcessId();
+			HANDLE dwTargetPid = 0;
+			if (!NT_SUCCESS(GetPidFromHandle(ProcessHandle, &dwTargetPid))) {
+				FLOG_ERROR("[NtAllocateVirtualMemory] GetPidFromHandle failed");
 				return status;
 			}
-			else
+
+			// 是否为可疑远程内存分配
+			if (!AreParentChildProcesses(dwCurPid, dwTargetPid))
 			{
-				status = NtAllocateVirtualMemory(ProcessHandle, BaseAddress, ZeroBits, RegionSize, AllocationType, Protect);
-				FLOG_INFO("[NtAllocateVirtualMemory] %s[%d] ==> %s[%d],[addr:0x%p,%s => %s].\n", CurrentProcessName, dwCurPid, TargetProcessName, dwTargetPid, *BaseAddress, ProtectionString(Protect), ProtectionString(Protect));
-				return status;
+				ULONG newflProtect = Protect;
+
+				// 去除可执行权限
+				if (Protect & PAGE_EXECUTE) newflProtect = PAGE_NOACCESS;
+				if (Protect & PAGE_EXECUTE_READ) newflProtect = PAGE_READONLY;
+				if (Protect & PAGE_EXECUTE_READWRITE) newflProtect = PAGE_READWRITE;
+				if (Protect & PAGE_EXECUTE_WRITECOPY) newflProtect = PAGE_WRITECOPY;
+
+				PCHAR CurrentProcessName = GetProcessNameByProcessId(dwCurPid);
+				PCHAR TargetProcessName = GetProcessNameByProcessId(dwTargetPid);
+#ifdef DEBUG
+				if (Protect != newflProtect)
+#endif // DEBUG
+				{
+					status = NtAllocateVirtualMemory(ProcessHandle, BaseAddress, ZeroBits, RegionSize, AllocationType, newflProtect);
+
+					FLOG_INFO("*************************Alert*************************\n");
+					FLOG_INFO("[NtAllocateVirtualMemory] Change Protect to no execte(NtAllocateVirtualMemory).\n");
+					FLOG_INFO("[NtAllocateVirtualMemory] %s[%d] ==> %s[%d],[addr:0x%p,%s => %s].\n", CurrentProcessName, dwCurPid, TargetProcessName, dwTargetPid, *BaseAddress, ProtectionString(Protect), ProtectionString(newflProtect));
+					FLOG_INFO("[NtAllocateVirtualMemory] Status: %p.\n", status);
+					// 记录内存分配信息
+					MemItem* item = (MemItem*)ExAllocatePool2(POOL_FLAG_PAGED, sizeof(MemItem), 'Pit');
+					if (item) {
+						item->Data.lpAddr = *BaseAddress;
+						item->Data.dwSize = *RegionSize;
+						item->Data.curflProtect = newflProtect;
+						item->Data.oriflProtect = Protect;
+						item->Data.initiatorPid = dwCurPid;
+						item->Data.targetPid = dwTargetPid;
+						item->Data.DIRTY = FALSE;
+						PushItem(dwTargetPid, &item->Entry);
+					}
+
+					// 附加执行注入
+					FLOG_INFO("[NtAllocateVirtualMemory] Inject DLL.\n");
+					AttachAndInjectProcess(dwTargetPid, InjectDllPath86, InjectDllPath64);
+
+					return status;
+				}
+#ifdef DEBUG
+				else
+				{
+					status = NtAllocateVirtualMemory(ProcessHandle, BaseAddress, ZeroBits, RegionSize, AllocationType, Protect);
+					FLOG_INFO("[NtAllocateVirtualMemory] %s[%d] ==> %s[%d],[addr:0x%p,%s => %s].\n", CurrentProcessName, dwCurPid, TargetProcessName, dwTargetPid, *BaseAddress, ProtectionString(Protect), ProtectionString(Protect));
+					return status;
+				}
+#endif // DEBUG
 			}
 		}
 	}
-	status = NtAllocateVirtualMemory(ProcessHandle, BaseAddress, ZeroBits, RegionSize, AllocationType, Protect);
 
+	status = NtAllocateVirtualMemory(ProcessHandle, BaseAddress, ZeroBits, RegionSize, AllocationType, Protect);
+	//FLOG_INFO("[NtAllocateVirtualMemory] Normal.\n");
 	return status;
 
 }
@@ -159,8 +173,11 @@ NTSTATUS detour_NtWriteVirtualMemory(
 	PVOID Buffer,
 	SIZE_T BufferSize,
 	PSIZE_T NumberOfBytesWritten
-) {
+)
+{
 	NTSTATUS status = STATUS_SUCCESS;
+	status = NtWriteVirtualMemory(ProcessHandle, BaseAddress, Buffer, BufferSize, NumberOfBytesWritten);
+#ifdef DEBUG
 	// 是否为自身内存分配
 	if (ProcessHandle != (HANDLE)0xffffffffffffffff)
 	{
@@ -176,21 +193,29 @@ NTSTATUS detour_NtWriteVirtualMemory(
 		{
 			PCHAR CurrentProcessName = GetProcessNameByProcessId(dwCurPid);
 			PCHAR TargetProcessName = GetProcessNameByProcessId(dwTargetPid);
-			if (RtlCompareMemory(CurrentProcessName, "ProcessInjecti", strlen(CurrentProcessName)) == strlen(CurrentProcessName)) {
-				status = NtWriteVirtualMemory(ProcessHandle, BaseAddress, Buffer, BufferSize, NumberOfBytesWritten);
-				FLOG_INFO("[NtWriteVirtualMemory] %s[%d] ==> %s[%d],[addr:0x%p].\n", CurrentProcessName, dwCurPid, TargetProcessName, dwTargetPid, BaseAddress);
-				//Communication::get_instance()->SendDataToUsermode(dwTargetPid, DataUnion{ BaseAddress });
-				return status;
-			}
-			else
 			{
-				status = NtWriteVirtualMemory(ProcessHandle, BaseAddress, Buffer, BufferSize, NumberOfBytesWritten);
+				PMemItem pMemItem = FindProcessAndMemNode(dwTargetPid, BaseAddress);
+				// 记录内存分配信息
+				if (pMemItem)
+					pMemItem->Data.DIRTY = TRUE;
+				else {
+					MemItem* item = (MemItem*)ExAllocatePool2(POOL_FLAG_PAGED, sizeof(MemItem), 'Pit');
+					item->Data.lpAddr = BaseAddress;
+					item->Data.dwSize = 0;
+					item->Data.curflProtect = 0;
+					item->Data.oriflProtect = 0;
+					item->Data.initiatorPid = dwCurPid;
+					item->Data.targetPid = dwTargetPid;
+					item->Data.DIRTY = TRUE;
+					PushItem(dwTargetPid, &item->Entry);
+				}
 				FLOG_INFO("[NtWriteVirtualMemory] %s[%d] ==> %s[%d],[addr:0x%p].\n", CurrentProcessName, dwCurPid, TargetProcessName, dwTargetPid, BaseAddress);
 				return status;
 			}
 		}
 	}
-	status = NtWriteVirtualMemory(ProcessHandle, BaseAddress, Buffer, BufferSize, NumberOfBytesWritten);
+#endif // DEBUG
+	//FLOG_INFO("[NtWriteVirtualMemory] Normal.\n");
 	return status;
 }
 
@@ -213,47 +238,75 @@ NTSTATUS detour_NtProtectVirtualMemory(
 	// 是否为自身内存操作
 	if (ProcessHandle != (HANDLE)0xffffffffffffffff)
 	{
-		HANDLE dwCurPid = PsGetCurrentProcessId();
-		HANDLE dwTargetPid = 0;
-		if (!NT_SUCCESS(GetPidFromHandle(ProcessHandle, &dwTargetPid))) {
-			LOG_ERROR("[NtProtectVirtualMemory] GetPidFromHandle failed");
-			return status;
-		}
-
-		// 是否为可疑远程内存操作
-		if (!AreParentChildProcesses(dwCurPid, dwTargetPid))
+#ifndef DEBUG
+		// 检查是否添加了执行权限
+		if ((NewAccessProtection & EXECUTE_FLAGS))
+#endif // DEBUG
 		{
-			PCHAR CurrentProcessName = GetProcessNameByProcessId(dwCurPid);
-			PCHAR TargetProcessName = GetProcessNameByProcessId(dwTargetPid);
-
-			// 检查是否添加了新的执行权限
-			if ((NewAccessProtection & EXECUTE_FLAGS)) {
-				// 去除执行权限
-				ULONG newflProtect = (NewAccessProtection & ~EXECUTE_FLAGS);
-				if (NewAccessProtection & PAGE_EXECUTE_READ) newflProtect |= PAGE_READONLY;
-				if (NewAccessProtection & PAGE_EXECUTE_READWRITE) newflProtect |= PAGE_READWRITE;
-				if (NewAccessProtection & PAGE_EXECUTE_WRITECOPY) newflProtect |= PAGE_WRITECOPY;
-				if (NewAccessProtection == 0) {
-					newflProtect = PAGE_READONLY; // 避免无权限
-				}
-				// 重设权限
-				status = NtProtectVirtualMemory(ProcessHandle, BaseAddress, NumberOfBytesToProtect, newflProtect, OldAccessProtection);
-				FLOG_INFO("[NtProtectVirtualMemory] Change Protect to no execte(NtProtectVirtualMemory)");
-				FLOG_INFO("[NtProtectVirtualMemory] %s[%d] ==> %s[%d],[addr:0x%p,%s => %s].\n", CurrentProcessName, dwCurPid, TargetProcessName, dwTargetPid, *BaseAddress, ProtectionString(*OldAccessProtection), ProtectionString(newflProtect));
-				FLOG_INFO("[NtProtectVirtualMemory] Inject DLL.\n");
-				AttachAndInjectProcess(dwTargetPid, InjectDllPath86, InjectDllPath64);
-
+			HANDLE dwCurPid = PsGetCurrentProcessId();
+			HANDLE dwTargetPid = 0;
+			if (!NT_SUCCESS(GetPidFromHandle(ProcessHandle, &dwTargetPid))) {
+				LOG_ERROR("[NtProtectVirtualMemory] GetPidFromHandle failed");
 				return status;
 			}
-			else
+
+			// 是否为可疑远程内存操作
+			if (!AreParentChildProcesses(dwCurPid, dwTargetPid))
 			{
-				status = NtProtectVirtualMemory(ProcessHandle, BaseAddress, NumberOfBytesToProtect, NewAccessProtection, OldAccessProtection);
-				FLOG_INFO("[NtProtectVirtualMemory] %s[%d] ==> %s[%d],[addr:0x%p,%s => %s].\n", CurrentProcessName, dwCurPid, TargetProcessName, dwTargetPid, *BaseAddress, ProtectionString(*OldAccessProtection), ProtectionString(NewAccessProtection));
-				return status;
+				PCHAR CurrentProcessName = GetProcessNameByProcessId(dwCurPid);
+				PCHAR TargetProcessName = GetProcessNameByProcessId(dwTargetPid);
+
+#ifdef DEBUG
+				// 检查是否添加了新的执行权限
+				if ((NewAccessProtection & EXECUTE_FLAGS))
+#endif // DEBUG
+				{
+					// 去除执行权限
+					ULONG newflProtect = (NewAccessProtection & ~EXECUTE_FLAGS);
+					if (NewAccessProtection & PAGE_EXECUTE_READ) newflProtect |= PAGE_READONLY;
+					if (NewAccessProtection & PAGE_EXECUTE_READWRITE) newflProtect |= PAGE_READWRITE;
+					if (NewAccessProtection & PAGE_EXECUTE_WRITECOPY) newflProtect |= PAGE_WRITECOPY;
+					if (NewAccessProtection == 0) {
+						newflProtect = PAGE_READONLY; // 避免无权限
+					}
+
+					PMemItem pMemItem = FindProcessAndMemNode(dwTargetPid, *BaseAddress);
+					if (pMemItem) pMemItem->Data.oriflProtect = NewAccessProtection;
+					else
+					{
+						MemItem* item = (MemItem*)ExAllocatePool2(POOL_FLAG_PAGED, sizeof(MemItem), 'Pit');
+						item->Data.lpAddr = *BaseAddress;
+						item->Data.dwSize = 0;
+						item->Data.curflProtect = 0;
+						item->Data.oriflProtect = NewAccessProtection;
+						item->Data.initiatorPid = dwCurPid;
+						item->Data.targetPid = dwTargetPid;
+						item->Data.DIRTY = FALSE;
+						PushItem(dwTargetPid, &item->Entry);
+					}
+					// 重设权限
+					FLOG_INFO("*************************Alert*************************\n");
+					status = NtProtectVirtualMemory(ProcessHandle, BaseAddress, NumberOfBytesToProtect, newflProtect, OldAccessProtection);
+					FLOG_INFO("[NtProtectVirtualMemory] Change Protect to no execte(NtProtectVirtualMemory)");
+					FLOG_INFO("[NtProtectVirtualMemory] %s[%d] ==> %s[%d],[addr:0x%p,%s => %s].\n", CurrentProcessName, dwCurPid, TargetProcessName, dwTargetPid, *BaseAddress, ProtectionString(*OldAccessProtection), ProtectionString(newflProtect));
+					FLOG_INFO("[NtProtectVirtualMemory] Inject DLL.\n");
+
+					return status;
+				}
+#ifdef DEBUG
+				else
+				{
+					status = NtProtectVirtualMemory(ProcessHandle, BaseAddress, NumberOfBytesToProtect, NewAccessProtection, OldAccessProtection);
+					FLOG_INFO("[NtProtectVirtualMemory] %s[%d] ==> %s[%d],[addr:0x%p,%s => %s].\n", CurrentProcessName, dwCurPid, TargetProcessName, dwTargetPid, *BaseAddress, ProtectionString(*OldAccessProtection), ProtectionString(NewAccessProtection));
+					return status;
+				}
+#endif // DEBUG
 			}
 		}
 	}
 	status = NtProtectVirtualMemory(ProcessHandle, BaseAddress, NumberOfBytesToProtect, NewAccessProtection, OldAccessProtection);
+	//FLOG_INFO("[NtProtectVirtualMemory] Normal.\n");
+
 	return status;
 }
 
@@ -274,6 +327,7 @@ NTSTATUS detour_NtQueryVirtualMemory(
 	_Out_opt_ PSIZE_T ReturnLength
 ) {
 	NTSTATUS status = STATUS_SUCCESS;
+	status = pNtQueryVirtualMemory(ProcessHandle, BaseAddress, MemoryInformationClass, MemoryInformation, MemoryInformationLength, ReturnLength);
 	// 是否为自身内存操作
 	if (ProcessHandle != (HANDLE)0xffffffffffffffff)
 	{
@@ -284,50 +338,77 @@ NTSTATUS detour_NtQueryVirtualMemory(
 			return status;
 		}
 
-		// 是否为可疑远程内存操作
-		if (!AreParentChildProcesses(dwCurPid, dwTargetPid))
-		{
-			PCHAR CurrentProcessName = GetProcessNameByProcessId(dwCurPid);
-			PCHAR TargetProcessName = GetProcessNameByProcessId(dwTargetPid);
+		PMemItem pMemItem = FindProcessAndMemNode(dwTargetPid, BaseAddress);
 
-			status = pNtQueryVirtualMemory(ProcessHandle, BaseAddress, MemoryInformationClass, MemoryInformation, MemoryInformationLength, ReturnLength);
-			MemoryInformation->Protect = PAGE_EXECUTE_READWRITE;
-			FLOG_INFO("Return Protect to PAGE_EXECUTE_READWRITE(NtQueryVirtualMemory)");
-			FLOG_INFO("[NtQueryVirtualMemory] %s[%d] ==> %s[%d],[addr:0x%p,%s].\n", CurrentProcessName, dwCurPid, TargetProcessName, dwTargetPid, BaseAddress, ProtectionString(MemoryInformation->Protect));
-			return status;
+		// 是否为已记录的内存操作
+		if (pMemItem)
+		{
+			// 原始权限为可执行
+			if (pMemItem->Data.oriflProtect & EXECUTE_FLAGS)
+			{
+				PCHAR CurrentProcessName = GetProcessNameByProcessId(dwCurPid);
+				PCHAR TargetProcessName = GetProcessNameByProcessId(dwTargetPid);
+				//MemoryInformation->Protect = pMemItem->Data.oriflProtect;
+				FLOG_INFO("*************************Alert*************************\n");
+				FLOG_INFO("Return Protect to no execte(NtQueryVirtualMemory)\n");
+				FLOG_INFO("[NtQueryVirtualMemory] %s[%d] ==> %s[%d],[addr:0x%p,%s].\n", CurrentProcessName, dwCurPid, TargetProcessName, dwTargetPid, BaseAddress, ProtectionString(MemoryInformation->Protect));
+				return status;
+			}
+
 		}
+
 	}
-	status = pNtQueryVirtualMemory(ProcessHandle, BaseAddress, MemoryInformationClass, MemoryInformation, MemoryInformationLength, ReturnLength);
 	return status;
 }
 
 NTSTATUS(*pNtMapViewOfSection)(
-	_In_ HANDLE SectionHandle,
-	_In_ HANDLE ProcessHandle,
-	_Inout_ PVOID* BaseAddress,
-	_In_ ULONG_PTR ZeroBits,
-	_In_ SIZE_T CommitSize,
-	_Inout_opt_ PLARGE_INTEGER SectionOffset,
-	_Inout_ PSIZE_T ViewSize,
-	_In_ SECTION_INHERIT InheritDisposition,
-	_In_ ULONG AllocationType,
-	_In_ ULONG Protect
+	_In_        HANDLE          SectionHandle,
+	_In_        HANDLE          ProcessHandle,
+	_Inout_     PVOID* BaseAddress,
+	_In_        ULONG_PTR       ZeroBits,
+	_In_        SIZE_T          CommitSize,
+	_Inout_opt_ PLARGE_INTEGER  SectionOffset,
+	_Inout_     PSIZE_T         ViewSize,
+	_In_        SECTION_INHERIT InheritDisposition,
+	_In_        ULONG           AllocationType,
+	_In_        ULONG           Win32Protect
 	);
 
 NTSTATUS detour_NtMapViewOfSection(
-	_In_ HANDLE SectionHandle,
-	_In_ HANDLE ProcessHandle,
-	_Inout_ PVOID* BaseAddress,
-	_In_ ULONG_PTR ZeroBits,
-	_In_ SIZE_T CommitSize,
-	_Inout_opt_ PLARGE_INTEGER SectionOffset,
-	_Inout_ PSIZE_T ViewSize,
-	_In_ SECTION_INHERIT InheritDisposition,
-	_In_ ULONG AllocationType,
-	_In_ ULONG Protect
+	_In_        HANDLE          SectionHandle,
+	_In_        HANDLE          ProcessHandle,
+	_Inout_     PVOID* BaseAddress,
+	_In_        ULONG_PTR       ZeroBits,
+	_In_        SIZE_T          CommitSize,
+	_Inout_opt_ PLARGE_INTEGER  SectionOffset,
+	_Inout_     PSIZE_T         ViewSize,
+	_In_        SECTION_INHERIT InheritDisposition,
+	_In_        ULONG           AllocationType,
+	_In_        ULONG           Win32Protect
 ) {
 	NTSTATUS status = STATUS_SUCCESS;
-	status = pNtMapViewOfSection(SectionHandle, ProcessHandle, BaseAddress, ZeroBits, CommitSize, SectionOffset, ViewSize, InheritDisposition, AllocationType, Protect);
+	status = pNtMapViewOfSection(SectionHandle, ProcessHandle, BaseAddress, ZeroBits, CommitSize, SectionOffset, ViewSize, InheritDisposition, AllocationType, Win32Protect);
+	// 是否为自身内存操作
+	//if (ProcessHandle != (HANDLE)0xffffffffffffffff)
+	{
+		HANDLE dwCurPid = PsGetCurrentProcessId();
+		HANDLE dwTargetPid = 0;
+		if (!NT_SUCCESS(GetPidFromHandle(ProcessHandle, &dwTargetPid))) {
+			LOG_ERROR("[NtProtectVirtualMemory] GetPidFromHandle failed");
+			return status;
+		}
+
+		// 是否为可疑远程内存操作
+		//if (!AreParentChildProcesses(dwCurPid, dwTargetPid))
+		{
+			PCHAR CurrentProcessName = GetProcessNameByProcessId(dwCurPid);
+			PCHAR TargetProcessName = GetProcessNameByProcessId(dwTargetPid);
+
+
+			FLOG_INFO("[NtMapViewOfSection] %s[%d] ==> %s[%d],[addr:0x%p,%s].\n", CurrentProcessName, dwCurPid, TargetProcessName, dwTargetPid, BaseAddress, ProtectionString(Win32Protect));
+			return status;
+		}
+	}
 	return status;
 }
 
@@ -342,7 +423,8 @@ NTSTATUS(*pNtMapViewOfSectionEx)(
 	_In_ SECTION_INHERIT InheritDisposition,
 	_In_ ULONG AllocationType,
 	_In_ ULONG Protect,
-	_In_ ULONG Win32Protect
+	_In_opt_ PVOID ExtParameters,
+	_In_ ULONG ExtParametersCount
 	);
 
 NTSTATUS detour_NtMapViewOfSectionEx(
@@ -356,10 +438,11 @@ NTSTATUS detour_NtMapViewOfSectionEx(
 	_In_ SECTION_INHERIT InheritDisposition,
 	_In_ ULONG AllocationType,
 	_In_ ULONG Protect,
-	_In_ ULONG Win32Protect
+	_In_opt_ PVOID ExtParameters,
+	_In_ ULONG ExtParametersCount
 ) {
 	NTSTATUS status = STATUS_SUCCESS;
-	status = pNtMapViewOfSectionEx(SectionHandle, ProcessHandle, BaseAddress, ZeroBits, CommitSize, SectionOffset, ViewSize, InheritDisposition, AllocationType, Protect, Win32Protect);
+	status = pNtMapViewOfSectionEx(SectionHandle, ProcessHandle, BaseAddress, ZeroBits, CommitSize, SectionOffset, ViewSize, InheritDisposition, AllocationType, Protect, ExtParameters, ExtParametersCount);
 	return status;
 }
 
@@ -510,6 +593,41 @@ NTSTATUS DispatchControl(IN PDEVICE_OBJECT pDeviceObject, IN PIRP pIrp)
 	return status;
 }
 
+// 进程回调函数
+VOID CreateProcessNotifyEx(
+	IN PEPROCESS Process,
+	IN HANDLE ProcessId,
+	IN OUT OPTIONAL PPS_CREATE_NOTIFY_INFO CreateInfo
+)
+{
+	char* ProcName;
+	char* ParentProcName;
+	HANDLE ParentProcessId = NULL;
+	NTSTATUS status;
+
+	// CreateInfo 为 NULL 说明进程退出
+	if (CreateInfo != NULL)
+	{
+		ProcName = (char*)PsGetProcessImageFileName(Process);
+
+
+		// 获取子进程的父进程 ID
+		status = GetParentProcessId(ProcessId, &ParentProcessId);
+		if (!NT_SUCCESS(status)) {
+			FLOG_INFO("获取父进程失败，子进程 PID: %d, Status: 0x%X\n", ProcessId, status);
+			return;
+		}
+		ParentProcName = GetProcessNameByProcessId(ParentProcessId);
+
+		FLOG_INFO("[ %s，PID: %d] create [ %s，PID: %d]\n", ParentProcName, ParentProcessId, ProcName, ProcessId);
+	}
+	else
+	{
+		//strcpy_s(ProcName, 16, PsGetProcessImageFileName(Process));
+		//DbgPrint("[kernel] 进程[ %s ] 退出了, 程序被关闭", ProcName);
+	}
+}
+
 // SYSCALL HOOK函数
 NTSTATUS HookSyscall(const char* SyscallName, void** org_syscall, void* detour_routine)
 {
@@ -538,8 +656,7 @@ VOID UnloadDriver(PDRIVER_OBJECT pDriverObject)
 	PMemItem pMemPageItem;
 
 
-	DbgPrint("[kernel] 驱动卸载.\r\n");
-	DbgBreakPoint();
+	LOG_INFO("Uninstall driver\n");
 	RtlInitUnicodeString(&symLink, LINK_NAME);
 	IoDeleteSymbolicLink(&symLink);
 	IoDeleteDevice(pDriverObject->DeviceObject);
@@ -566,6 +683,11 @@ VOID UnloadDriver(PDRIVER_OBJECT pDriverObject)
 
 	// 释放锁
 	ExReleaseFastMutex(&global.Mutex);
+#ifdef DEBUG
+	// 注销进程回调
+	PsSetCreateProcessNotifyRoutineEx((PCREATE_PROCESS_NOTIFY_ROUTINE_EX)CreateProcessNotifyEx, TRUE);
+#endif // DEBUG
+	FLOG_INFO("Unregister kernel callback.\n");
 	EtwHookManager::get_instance()->destory();
 	kstd::Logger::destory();
 }
@@ -614,6 +736,7 @@ EXTERN_C NTSTATUS DriverEntry(PDRIVER_OBJECT pDriverObject, PUNICODE_STRING)
 	HookSyscall("NtProtectVirtualMemory", ((void**)&NtProtectVirtualMemory), detour_NtProtectVirtualMemory);
 	HookSyscall("NtWriteVirtualMemory", ((void**)&NtWriteVirtualMemory), detour_NtWriteVirtualMemory);
 	//HookSyscall("NtQueryVirtualMemory", ((void**)&pNtQueryVirtualMemory), detour_NtQueryVirtualMemory);
+	// FIXME:detour_NtMapViewOfSection映射有问题
 	//HookSyscall("NtMapViewOfSection", ((void**)&pNtMapViewOfSection), detour_NtMapViewOfSection);
 	//HookSyscall("NtMapViewOfSectionEx", ((void**)&pNtMapViewOfSectionEx), detour_NtMapViewOfSectionEx);
 
@@ -650,7 +773,7 @@ EXTERN_C NTSTATUS DriverEntry(PDRIVER_OBJECT pDriverObject, PUNICODE_STRING)
 	// 初始化默认分发例程
 	for (ULONG i = 0; i < IRP_MJ_MAXIMUM_FUNCTION; i++)
 	{
-		DbgPrint("[kernel] 初始化分发历程: %d \n", i);
+		FLOG_INFO("[kernel] 初始化分发历程: %d \n", i);
 		pDriverObject->MajorFunction[i] = DispatchDefault;
 	}
 
@@ -662,6 +785,23 @@ EXTERN_C NTSTATUS DriverEntry(PDRIVER_OBJECT pDriverObject, PUNICODE_STRING)
 
 	//指定控制分发例程
 	pDriverObject->MajorFunction[IRP_MJ_DEVICE_CONTROL] = DispatchControl;
+
+	// 绕过签名检查
+	// LINKER_FLAGS=/INTEGRITYCHECK
+	BypassCheckSign(pDriverObject);
+
+	// 创建进程回调
+	// 参数1: 新进程的EProcess
+	// 参数2: 新进程PID
+	// 参数3: 新进程详细信息 (仅在创建进程时有效)
+#ifdef DEBUG
+	status = PsSetCreateProcessNotifyRoutineEx((PCREATE_PROCESS_NOTIFY_ROUTINE_EX)CreateProcessNotifyEx, FALSE);
+	if (!NT_SUCCESS(status))
+	{
+		FLOG_INFO("创建进程回调错误(0x%08X)\n", status);
+		return status;
+	}
+#endif // DEBUG
 
 	return status;
 }

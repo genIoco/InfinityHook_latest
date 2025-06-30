@@ -79,6 +79,7 @@ namespace kstd {
 	NTSTATUS inline Logger::logPrint(LogLevel log_level, const char* function_name, const char* format, ...)
 	{
 		auto status = STATUS_SUCCESS;
+		//return status;
 		char log_message[412]{};
 		char time[100]{};
 		va_list args{};

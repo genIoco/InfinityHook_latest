@@ -17,8 +17,8 @@ typedef struct SusMemPageNode {
 	DWORD  oriflProtect; // 原始内存页权限
 	//TODO:可以内存页是否存在外部写入的情况，脏位
 	BOOL DIRTY;
-	HANDLE targetPid; // 当前进程 ID
-	HANDLE initiatorPid;
+	HANDLE targetPid; // 目前进程 ID
+	HANDLE initiatorPid; // 发起进程 ID
 
 }SusMemPage, * PSusMemPage;
 
